@@ -2,6 +2,11 @@ const imaps = require("imap-simple");
 const { simpleParser } = require("mailparser");
 const esClient = require("./elasticsearchClient");
 const { categorizeEmailBatch } = require("./aiCategorizerService");
+const { sendSlackNotification, triggerWebhook } = require("./notificationService"); // New import
+const {
+    triggerExternalWebhook,
+} = require("./notificationService");
+  
 
 async function fetchEmails({ email, password, host, port, folder = "INBOX" }) {
     const config = {
@@ -55,8 +60,9 @@ async function fetchEmails({ email, password, host, port, folder = "INBOX" }) {
         };
 
         try {
-            const category = await categorizeEmailBatch(mailData);
-            mailData.category = category;
+            // Your categorizeEmailBatch expects an array, so wrap mailData inside []
+            const categories = await categorizeEmailBatch([mailData]);
+            mailData.category = categories[0] || "Uncategorized";
         } catch (err) {
             console.error("Gemini classification error:", err);
             mailData.category = "Uncategorized";
@@ -71,6 +77,16 @@ async function fetchEmails({ email, password, host, port, folder = "INBOX" }) {
             });
         } catch (err) {
             console.error("Elasticsearch Index Error:", err.message);
+        }
+
+        // ** New: Send Slack and webhook notifications if category is Interested **
+        if (mailData.category === "Interested") {
+            try {
+                await sendSlackNotification(mailData);
+                await triggerExternalWebhook(mailData);
+            } catch (notifErr) {
+                console.error("Notification error:", notifErr.message);
+            }
         }
 
         // ⏳ Wait to respect Gemini free-tier limits (12 req/min ≈ 5s delay)
